@@ -13,7 +13,7 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # Inclusive coordinates in a 1920x1080 capture, stored here end-exclusive.
 CLOSE_ROI = (1809,33,1881,105)
 MENU_THRESHOLD = .80
-VERSION = '2.6.0'
+VERSION = '2.6.1'
 
 class Cancelled(Exception): pass
 

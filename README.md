@@ -6,7 +6,8 @@
 ## ダウンロード
 
 実行用ZIPは、このリポジトリの [Releases](https://github.com/ty79245243-ops/smm2-pause-cutter/releases) に掲載します。
-現在の2.6.0は公開準備中です。第三者バイナリの対応ソース提供を確認するまで、Windows配布ZIPは公開しません。
+2.6.1はコミュニティ共有用です。開発PCで起動・解析・書き出しを確認しています。別PCでの動作確認は未実施です。
+実行用ZIPには必要な部品と対応ソースを同梱し、Pythonの導入や初回のダウンロードは不要です。
 GitHubが自動生成する「Source code」はソース用で、実行用ZIPとは異なります。
 
 ## 使い方
@@ -59,6 +60,7 @@ GitHubが自動生成する「Source code」はソース用で、実行用ZIPと
 ## 開発・ライセンス
 
 ソース起動・テスト・Windowsビルドは [BUILDING.md](BUILDING.md)。
+同梱FFmpeg/x264/PyAVの対応ソースとビルド手順は実行用ZIPの `source/` にあります。
 自作コード・幾何学的に生成する✕テンプレートはMITです。[LICENSE](LICENSE) を参照してください。
 同梱する第三者ライブラリにMITが適用されるわけではありません。[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) と `licenses/` を参照してください。
 バイナリの再配布条件は [BUILDING.md](BUILDING.md) と [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。

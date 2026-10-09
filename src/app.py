@@ -446,6 +446,17 @@ def main():
         else: print(json.dumps(data,ensure_ascii=False,indent=2))
     else:
         root = tk.Tk()
+        help_menu = tk.Menu(root, tearoff=False)
+        help_menu.add_command(label='ライセンス', command=lambda: messagebox.showinfo(
+            'ライセンス', 'SMM2 Pause Cutter：MIT\n'
+            '動画読み込み用FFmpeg：LGPL 2.1以降（DLL）\n'
+            '書き出し用FFmpeg・x264：GPL 2以降（別プロセス）\n'
+            'PyAV・OpenCV・NumPy・Python等：各コンポーネントのライセンス\n\n'
+            'ライセンス全文はlicenses、対応ソースとビルド手順はsourceフォルダに同梱しています。\n'
+            'ソースの改変やライブラリの交換を禁止する追加条件はありません。'))
+        menu = tk.Menu(root)
+        menu.add_cascade(label='ヘルプ', menu=help_menu)
+        root.configure(menu=menu)
         def callback_error(kind,value,trace):
             logger.error('UI callback failed',exc_info=(kind,value,trace))
             messagebox.showerror('エラー','処理中にエラーが発生しました。ローカルのログを確認してください。')

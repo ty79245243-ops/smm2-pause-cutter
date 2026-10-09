@@ -1,0 +1,48 @@
+{
+  "version": "2.6.1",
+  "platform": "Windows x86_64",
+  "compiler": "MinGW-w64 GCC 15.1.0, win32 threads, SEH, UCRT",
+  "mingw_runtime": "v12",
+  "python": "3.12.14",
+  "tcl_tk": "8.6.12",
+  "openssl": "3.5.8",
+  "nasm": "2.16.03",
+  "make": "MSYS GNU Make 4.4.1-2",
+  "sources_unmodified": [
+    "FFmpeg 9.0.2",
+    "x264 b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
+  ],
+  "build_script": "native/build-native.sh",
+  "decoder_license": "LGPL-2.1-or-later",
+  "encoder_license": "GPL-2.0-or-later",
+  "decoder_external_libraries": [],
+  "encoder_external_libraries": [
+    "x264"
+  ],
+  "pyav": "19.0.1, only PE DLL import names changed; see binding-import-changes.json",
+  "source_archives": {
+    "av-19.0.1.tar.gz": "08674930eaf1af78a3ed8f93d3ba49383323b3a867e84349d9c399e36f7497da",
+    "ffmpeg-9.0.2.tar.xz": "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e",
+    "x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2": "6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224"
+  },
+  "native_binaries": {
+    "avcodec-63.dll": "f5f9fbf3ab42e74fd47206839ae677435124a9485ab12b46c00c604cd2b62072",
+    "avdevice-63.dll": "76ff767e250de1779c850bf0eeafe18601a287761b969c9d363f6a2041947084",
+    "avfilter-12.dll": "5d36ee050fee833e99be4abc51c0da42c80b0dc873152bc69d7bc6171b791039",
+    "avformat-63.dll": "6a97b9f0bb382ce0e9059950580e042e86419dac4ec6b5ae6235a34f230c3530",
+    "avutil-61.dll": "ba52bc0c1016299f04f9befe00c0c5c9b1daf14832391dcea43ffa5a2068dcd0",
+    "swresample-7.dll": "6f43f4eee870219acd7af40e93dfc8bdf5ba459f6e9ffb32eb484aa13ac51745",
+    "swscale-10.dll": "032249d520f52b5ffb71dd4cdf70250dee801bedcab38ba45c99b2759e76d44d",
+    "ffmpeg.exe": "04727bd1a592b7bfab4be4a3bc6815c43c7d8dc3d072467d733f1f8a32d9f973"
+  },
+  "verification": {
+    "unit_tests": 41,
+    "real_video_frames": 13616,
+    "enabled_cuts": 84,
+    "cut_boundaries_match_previous_version": true,
+    "packaged_ui_startup": true,
+    "packaged_muted_export_frames": 38,
+    "packaged_audio_export_frames": 38,
+    "separate_pc_tested": false
+  }
+}

@@ -1,4 +1,4 @@
-import tempfile,unittest,json
+import tempfile,unittest,json,base64
 from pathlib import Path
 from unittest.mock import patch
 import numpy as np,av
@@ -27,12 +27,10 @@ class SecurityTests(unittest.TestCase):
             with self.assertRaises(ValueError):ffmpeg()
     def test_decoder_frame_count_timestamp_and_seek_with_own_video(self):
         path=self.root/'own sample & name.mp4'
-        with av.open(str(path),'w') as container:
-            stream=container.add_stream('mpeg4',rate=30);stream.width=160;stream.height=90;stream.pix_fmt='yuv420p'
-            for i in range(10):
-                frame=av.VideoFrame.from_ndarray(np.full((90,160,3),i*20,np.uint8),format='bgr24')
-                for packet in stream.encode(frame):container.mux(packet)
-            for packet in stream.encode():container.mux(packet)
+        # Ten self-generated solid-color MPEG4 frames, 30fps, pixels i*20.
+        # Decode verification does not require an encoder in the decoder DLLs.
+        fixture=Path(__file__).parent/'test_fixtures'/'ten_frames.b64'
+        path.write_bytes(base64.b64decode(fixture.read_bytes()))
         cap=VideoCapture(path);self.assertTrue(cap.isOpened());self.assertEqual(cap.get(FRAME_COUNT),10)
         self.assertTrue(cap.set(POS_FRAMES,5));ok,frame=cap.read();self.assertTrue(ok)
         self.assertAlmostEqual(cap.get(POS_MSEC),1000*5/30,places=2)

@@ -2,11 +2,11 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all,collect_delvewheel_libs_directory
 root=Path(SPECPATH)
 ffmpeg=root/'bin'/'ffmpeg.exe'
-if not ffmpeg.is_file():raise RuntimeError('Run scripts/fetch_ffmpeg.py first')
+if not ffmpeg.is_file():raise RuntimeError('Build native FFmpeg first; see BUILDING.md')
 av_data,av_bins,av_hidden=collect_all('av')
 av_data,av_bins=collect_delvewheel_libs_directory('av',datas=av_data,binaries=av_bins)
-a=Analysis([str(root/'src'/'app.py')],pathex=[str(root/'src')],binaries=av_bins,
-    datas=av_data+[(str(ffmpeg),'bin')],hiddenimports=av_hidden,excludes=['imageio_ffmpeg'],noarchive=False)
+a=Analysis([str(root/'src'/'app.py')],pathex=[str(root/'src'),str(root/'vendor')],binaries=av_bins,
+    datas=av_data+[(str(p),'av.libs') for p in (root/'vendor'/'av.libs').glob('*.dll')]+[(str(ffmpeg),'bin')],hiddenimports=av_hidden,excludes=['imageio_ffmpeg'],noarchive=False)
 # Never ship the unused old FFmpeg decoder from OpenCV.
 a.binaries=[x for x in a.binaries if 'opencv_videoio_ffmpeg' not in str(x).lower()]
 a.datas=[x for x in a.datas if 'opencv_videoio_ffmpeg' not in str(x).lower()]
