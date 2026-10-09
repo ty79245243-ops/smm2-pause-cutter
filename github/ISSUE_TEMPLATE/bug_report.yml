@@ -1,0 +1,26 @@
+name: 不具合報告
+description: 起動・解析・書き出しの問題
+body:
+  - type: input
+    id: version
+    attributes:
+      label: アプリのバージョン
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Windowsのバージョン、動画の解像度・fps・形式
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順と期待する動作
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作・エラー
+      description: ログやカット記録を共有する前に個人情報を消してください。脆弱性はSecurityから非公開で報告してください。
