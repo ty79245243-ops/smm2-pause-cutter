@@ -1,5 +1,5 @@
 {
-  "version": "2.6.1",
+  "version": "2.7.4",
   "platform": "Windows x86_64",
   "compiler": "MinGW-w64 GCC 15.1.0, win32 threads, SEH, UCRT",
   "mingw_runtime": "v12",
@@ -36,13 +36,26 @@
     "ffmpeg.exe": "04727bd1a592b7bfab4be4a3bc6815c43c7d8dc3d072467d733f1f8a32d9f973"
   },
   "verification": {
-    "unit_tests": 41,
-    "real_video_frames": 13616,
-    "enabled_cuts": 84,
-    "cut_boundaries_match_previous_version": true,
+    "unit_tests": 61,
+    "last_take_synthetic_input_frames": 405,
+    "last_take_start_frame": 201,
+    "last_take_output_frames": 190,
+    "default_regression_output_frames": 38,
+    "pause_detection_frames": 205,
+    "boundary_cache_frames": 205,
+    "reverse_block_unit_test_read_frames": 480,
+    "reverse_block_unit_test_total_frames": 700,
     "packaged_ui_startup": true,
-    "packaged_muted_export_frames": 38,
-    "packaged_audio_export_frames": 38,
+    "packaged_audio_and_muted_export": true,
+    "actual_switch2_recording_tested": true,
+    "provided_recording_input_frames": 78169,
+    "provided_recording_take_start_frame": 74769,
+    "provided_recording_output_frames": 1655,
+    "provided_recording_pause_cuts": 26,
+    "second_recording_frames": 1090,
+    "second_recording_take_start_frame": 632,
+    "second_recording_output_frames": 269,
+    "indexed_seeks_with_late_pts_tested": true,
     "separate_pc_tested": false
   }
 }

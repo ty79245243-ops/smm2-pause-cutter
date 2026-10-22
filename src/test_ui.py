@@ -37,6 +37,40 @@ class WorkflowTests(unittest.TestCase):
         self.assertIs(self.app.export_area.master,self.app.results)
         self.assertEqual(self.app.export_area.pack_info()['side'],'bottom')
         self.assertEqual(self.app.export_btn.pack_info()['side'],'left')
+
+    def test_last_take_control_gating_and_scope_change_invalidates_result(self):
+        self.assertFalse(self.app.last_take.get())
+        self.assertTrue(self.app.last_take_check.instate(['disabled']))
+
+        self.ready(expand=False)
+        self.assertFalse(self.app.last_take_check.instate(['disabled']))
+        self.app.last_take_check.invoke()
+        self.assertTrue(self.app.last_take.get())
+        self.assertIsNone(self.app.analysis)
+        self.assertFalse(self.app.results_visible)
+        self.assertTrue(self.app.export_btn.instate(['disabled']))
+        self.app.locked(True)
+        self.assertTrue(self.app.last_take_check.instate(['disabled']))
+
+    def test_branding_and_checkmark_control(self):
+        self.assertEqual(self.root.title(),'SMM2 Pause Cutter')
+        self.assertEqual(self.app.last_take_check.cget('text'),'最後のテイクのみ切り出してポーズカットする（switch2のみ）')
+        self.assertEqual(self.app.last_take_check.cget('style'),'SMM2.TCheckbutton')
+        self.app.load_file('test.mp4')
+        self.app.last_take_check.invoke()
+        self.assertTrue(self.app.last_take_check.instate(['selected']))
+        self.app.last_take_check.invoke()
+        self.assertFalse(self.app.last_take_check.instate(['selected']))
+
+    def test_last_take_summary_and_no_retry_message(self):
+        self.ready(expand=False)
+        a=Analysis('test.mp4',300,60,1920,1080,[],0,0,150,True,[(150,210)])
+        self.app.accept_analysis(a)
+        self.assertIn('151フレーム目から',self.app.status.get())
+        self.assertIn('出力 2.50秒',self.app.status.get())
+        a.take_start=0;a.restart_dark_runs=[]
+        self.app.accept_analysis(a)
+        self.assertIn('動画全体を対象',self.app.status.get())
     def test_results_default_to_collapsed_and_export_is_available(self):
         self.ready(expand=False)
         self.assertTrue(self.app.results_visible);self.assertFalse(self.app.details_visible)

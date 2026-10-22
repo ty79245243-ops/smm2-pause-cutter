@@ -14,8 +14,8 @@ from pause_table import PauseTable,ROW_HEIGHT,HEADER_HEIGHT
 class App:
     def __init__(self, root):
         self.root = root
-        root.title(f'Mario Pause Cutter {VERSION} — マリオメーカー2')
-        root.geometry('1040x350'); root.minsize(920,330)
+        root.title('SMM2 Pause Cutter')
+        root.geometry('1040x400'); root.minsize(920,380)
         self.q = queue.Queue(); self.cancel = threading.Event()
         self.busy = False; self.analysis = None; self.original_cuts = []
         self.photos = []; self.editor = None;self.resize_preview_job=None
@@ -23,6 +23,7 @@ class App:
         self.details_visible = False;self.results_visible=False
         self.view_mode=tk.StringVar(value="all");self.applied_filter="all"
         self.file = tk.StringVar(); self.audio = tk.StringVar(value='mute')
+        self.last_take = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value='まず「元動画を選択…」から動画を読み込んでください。')
 
         style = ttk.Style(); style.theme_use('clam')
@@ -30,9 +31,29 @@ class App:
         style.configure('Title.TLabel',font=('Yu Gothic UI',20,'bold'))
         style.configure('Step.TLabel',font=('Yu Gothic UI',11,'bold'))
         style.configure('Hint.TLabel',foreground='#5e6672')
+        # clam draws an X for its default selected indicator. Supply our own
+        # check mark so selected, unselected and disabled states are explicit.
+        self.check_images=[]
+        for selected,disabled in ((False,False),(True,False),(False,True),(True,True)):
+            image=tk.PhotoImage(master=root,width=18,height=18)
+            border='#b8bec8' if disabled else '#2b68a6' if selected else '#7b8794'
+            fill='#e5e7eb' if disabled else '#2b68a6' if selected else '#ffffff'
+            image.put(border,to=(1,1,17,17));image.put(fill,to=(2,2,16,16))
+            if selected:
+                ink='#929aa5' if disabled else '#ffffff'
+                for (x1,y1),(x2,y2) in [((4,8),(7,11)),((7,11),(13,5))]:
+                    steps=max(abs(x2-x1),abs(y2-y1))
+                    for i in range(steps+1):
+                        x=round(x1+(x2-x1)*i/steps);y=round(y1+(y2-y1)*i/steps)
+                        image.put(ink,to=(x,y,x+2,y+2))
+            self.check_images.append(image)
+        style.element_create('SMM2.Check.indicator','image',self.check_images[0],
+            ('disabled','selected',self.check_images[3]),('disabled',self.check_images[2]),('selected',self.check_images[1]))
+        style.layout('SMM2.TCheckbutton',[('Checkbutton.padding',{'sticky':'nswe','children':[
+            ('SMM2.Check.indicator',{'side':'left','sticky':''}),('Checkbutton.label',{'side':'left','sticky':'nswe'})]})])
 
         main = ttk.Frame(root,padding=20); main.pack(fill='both',expand=True)
-        ttk.Label(main,text=f'Mario Pause Cutter {VERSION}',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(main,text='SMM2 Pause Cutter',style='Title.TLabel').pack(anchor='w')
         ttk.Label(main,text='ポーズを確認しながらカットして、動画を保存します。',style='Hint.TLabel').pack(anchor='w',pady=(0,10))
         ttk.Label(main,text='1. 元動画を選択',style='Step.TLabel').pack(anchor='w')
         row = ttk.Frame(main); row.pack(fill='x',pady=(4,10))
@@ -48,6 +69,9 @@ class App:
             r = ttk.Radiobutton(audio,text=text,value=value,variable=self.audio)
             r.pack(side='left',padx=(0,16)); self.radios.append(r)
         ttk.Label(main,text='音声を残す場合、カットの継ぎ目でBGMや効果音が途切れます。',style='Hint.TLabel').pack(anchor='w')
+        self.last_take_check=ttk.Checkbutton(main,text='最後のテイクのみ切り出してポーズカットする（switch2のみ）',
+            variable=self.last_take,command=self.change_scope,style='SMM2.TCheckbutton')
+        self.last_take_check.pack(anchor='w',pady=(8,0))
 
         actions = ttk.Frame(main); actions.pack(fill='x',pady=(10,6))
         self.analyze_btn = ttk.Button(actions,text='3. ポーズを解析',command=self.scan)
@@ -102,6 +126,7 @@ class App:
         ready = bool(self.file.get()) and not self.busy
         self.choose_btn.configure(state='disabled' if self.busy else 'normal')
         self.analyze_btn.configure(state='normal' if ready else 'disabled')
+        self.last_take_check.configure(state='normal' if ready else 'disabled')
         for r in self.radios: r.configure(state='normal' if ready else 'disabled')
         self.export_btn.configure(state='normal' if self.analysis and not self.busy else 'disabled')
         self.cancel_btn.configure(state='normal' if self.busy else 'disabled')
@@ -110,8 +135,8 @@ class App:
         for radio in self.filter_radios:radio.configure(state='normal' if self.analysis and not self.busy else 'disabled')
 
     def compact_size(self):
-        self.root.minsize(920,440 if self.results_visible else 330)
-        self.root.geometry(f'{max(920,self.root.winfo_width())}x{470 if self.results_visible else 350}')
+        self.root.minsize(920,490 if self.results_visible else 380)
+        self.root.geometry(f'{max(920,self.root.winfo_width())}x{520 if self.results_visible else 400}')
 
     def hide_details(self):
         self.cancel_edit();self.details.pack_forget();self.results.pack_forget()
@@ -195,6 +220,12 @@ class App:
     def locked(self,b):
         self.busy = b; self.refresh_controls()
 
+    def change_scope(self):
+        if self.busy:return
+        if self.file.get():
+            self.load_file(self.file.get())
+            self.status.set('切り出し設定を変更しました。「3. ポーズを解析」で再解析してください。')
+
     def work(self,fn,kind):
         self.cancel.clear(); self.locked(True); self.bar['value'] = 0
         def worker():
@@ -210,7 +241,8 @@ class App:
         self.hide_details(); self.analysis = None; self.original_cuts = []
         self.clear_rows(); self.clear_previews()
         self.status.set('動画を解析しています…')
-        path = self.file.get(); self.work(lambda cb:analyze(path,cb,self.cancel),'analyzed')
+        path = self.file.get(); last_take=self.last_take.get()
+        self.work(lambda cb:analyze(path,cb,self.cancel,last_take_only=last_take),'analyzed')
 
     def accept_analysis(self,analysis):
         self.hide_details();self.clear_previews()
@@ -234,8 +266,12 @@ class App:
     def summary(self):
         review=sum(self.needs_review(i) for i in range(len(self.analysis.cuts)))
         self.review_count.set(f'通常 {len(self.analysis.cuts)-review}区間／要確認 {review}区間')
-        a = self.analysis; removed = sum(c.end-c.start for c in a.cuts if c.enabled)
-        self.status.set(f'{len(a.cuts)}区間検出／カット予定 {sum(c.enabled for c in a.cuts)}区間／削除 {removed:,}フレーム ({removed/a.fps:.2f}秒)／出力 {(a.frames-removed)/a.fps:.2f}秒')
+        a = self.analysis; kept=sum(b-s for s,b in keep_ranges(a)); removed=a.frames-kept
+        take=''
+        if a.last_take_only:
+            take=(f'最後のテイク：元動画の{a.take_start+1:,}フレーム目から／' if a.restart_dark_runs
+                  else 'やり直しの暗転なし：動画全体を対象／')
+        self.status.set(take+f'{len(a.cuts)}区間検出／カット予定 {sum(c.enabled for c in a.cuts)}区間／削除 {removed:,}フレーム ({removed/a.fps:.2f}秒)／出力 {kept/a.fps:.2f}秒')
 
     def selected(self):
         return self.table.selected_index if self.analysis else None
@@ -387,7 +423,7 @@ class App:
         except ValueError as e: messagebox.showerror('区間を確認',str(e)); return
         src = Path(self.analysis.source)
         path = filedialog.asksaveasfilename(title='カット後の動画を保存',initialdir=str(src.parent),
-            initialfile=src.stem+'_pausecut.mp4',defaultextension='.mp4',filetypes=[('MP4','*.mp4')])
+            initialfile=src.stem+('_lasttake_pausecut.mp4' if self.analysis.last_take_only else '_pausecut.mp4'),defaultextension='.mp4',filetypes=[('MP4','*.mp4')])
         if not path: return
         if Path(path).exists():
             messagebox.showerror('名前を変更','上書きせず、別のファイル名で保存してください。'); return
@@ -405,7 +441,7 @@ class App:
                     if not data.cuts: self.status.set('ポーズメニューは見つかりませんでした。動画はそのまま書き出せます。')
                 elif kind=='exported':
                     self.locked(False)
-                    messagebox.showinfo('保存完了',f'保存しました。\n{data["output"]}\n\nカット記録（.cuts.json）も同じ場所に保存しました。')
+                    messagebox.showinfo('保存完了',f'保存しました。\n{data["output"]}')
                 elif kind=='cancelled': self.locked(False); self.status.set('中止しました。')
                 elif kind=='error':
                     self.locked(False); self.status.set('処理に失敗しました。'); messagebox.showerror('エラー',data)
@@ -437,10 +473,13 @@ def main():
     configure(VERSION)
     p = argparse.ArgumentParser()
     p.add_argument('--analyze'); p.add_argument('--output'); p.add_argument('--keep-audio',action='store_true')
+    p.add_argument('--last-take-only',action='store_true',help='Switch 2の完全暗転で最後のテイクのみ切り出す')
     p.add_argument('--report'); p.add_argument('--smoke-ui',action='store_true'); args = p.parse_args()
     if args.analyze:
-        a = analyze(args.analyze,lambda p,s:print(s,flush=True))
-        data = {'frames':a.frames,'fps':a.fps,'cuts':[vars(c) for c in a.cuts]}
+        a = analyze(args.analyze,lambda p,s:print(s,flush=True),last_take_only=args.last_take_only)
+        data = {'frames':a.frames,'fps':a.fps,'cuts':[vars(c) for c in a.cuts],
+                'last_take_only':a.last_take_only,'take_start_frame':a.take_start+1,
+                'restart_dark_runs':[{'from':s+1,'through':e} for s,e in a.restart_dark_runs]}
         if args.output: data = export(a,args.output,not args.keep_audio,lambda p,s:print(s,flush=True))
         if args.report: Path(args.report).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
         else: print(json.dumps(data,ensure_ascii=False,indent=2))

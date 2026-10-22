@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 import numpy as np,av
 from media_io import VideoCapture,local_video,INPUT_OPTIONS,POS_FRAMES,POS_MSEC,FRAME_COUNT
-from engine import ffmpeg_input,ffmpeg
+from engine import ffmpeg_input,ffmpeg,Analysis,export
 
 class SecurityTests(unittest.TestCase):
     def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
@@ -35,5 +35,32 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(cap.set(POS_FRAMES,5));ok,frame=cap.read();self.assertTrue(ok)
         self.assertAlmostEqual(cap.get(POS_MSEC),1000*5/30,places=2)
         self.assertLess(abs(int(frame[0,0,0])-100),5);cap.release()
+
+    def test_export_saves_only_mp4_and_ignores_old_cut_report(self):
+        source=self.root/'input.mp4'
+        source.write_bytes(base64.b64decode((Path(__file__).parent/'test_fixtures/ten_frames.b64').read_bytes()))
+        stat=source.stat();a=Analysis(str(source),10,30,160,90,[],stat.st_size,stat.st_mtime_ns)
+        def encode(args,*unused):Path(args[-1]).write_bytes(source.read_bytes())
+        dst=self.root/'output.mp4'
+        with patch('engine.run_ffmpeg',side_effect=encode):export(a,dst)
+        self.assertTrue(dst.is_file());self.assertFalse(dst.with_suffix('.cuts.json').exists())
+        old=self.root/'another.cuts.json';old.write_text('old record',encoding='utf-8')
+        with patch('engine.run_ffmpeg',side_effect=encode):export(a,self.root/'another.mp4')
+        self.assertEqual(old.read_text(encoding='utf-8'),'old record')
+
+    def test_actual_pts_index_seeks_both_late_tail_frames_by_ordinal(self):
+        shifted=self.root/'shifted.mp4'
+        # Self-generated ten solid-color frames, with the last two PTS delayed
+        # by one and two clock slots. Decoder-only builds need no encoder.
+        shifted.write_bytes(base64.b64decode((Path(__file__).parent/'test_fixtures/ten_frames_delayed_tail.b64').read_bytes()))
+        cap=VideoCapture(shifted)
+        try:
+            cap.build_frame_index()
+            self.assertEqual(len(cap.frame_pts),10)
+            for index,want in ((8,160),(9,180),(5,100)):
+                self.assertTrue(cap.set(POS_FRAMES,index));ok,frame=cap.read();self.assertTrue(ok)
+                self.assertLess(abs(float(frame.mean())-want),5)
+                self.assertTrue(cap.timestamp_matches(cap.get(POS_MSEC)/1000,index,cap.fps))
+        finally:cap.release()
 
 if __name__=='__main__':unittest.main()
