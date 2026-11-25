@@ -7,7 +7,7 @@ from tkinter import ttk, filedialog, messagebox
 import cv2
 from media_io import VideoCapture
 from diagnostics import logger,configure
-from engine import analyze, export, keep_ranges, Cancelled, VERSION
+from engine import analyze, export, keep_ranges, output_plan, Cancelled, VERSION
 from pause_table import PauseTable,ROW_HEIGHT,HEADER_HEIGHT
 
 
@@ -24,6 +24,7 @@ class App:
         self.view_mode=tk.StringVar(value="all");self.applied_filter="all"
         self.file = tk.StringVar(); self.audio = tk.StringVar(value='mute')
         self.last_take = tk.BooleanVar(value=False)
+        self.mark_pauses = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value='まず「元動画を選択…」から動画を読み込んでください。')
 
         style = ttk.Style(); style.theme_use('clam')
@@ -115,6 +116,9 @@ class App:
         self.export_area = ttk.Frame(self.results); self.export_area.pack(side='bottom',fill='x',pady=(14,0))
         self.export_btn = ttk.Button(self.export_area,text='4. MP4を書き出す…',command=self.save)
         self.export_btn.pack(side='left')
+        self.marker_check=ttk.Checkbutton(self.export_area,text='ポーズ位置に目印を付ける（80×80・1フレームのみ）',
+            variable=self.mark_pauses,style='SMM2.TCheckbutton')
+        self.marker_check.pack(side='left',padx=12)
         self.refresh_controls()
         self.poll_job=root.after(100,self.poll)
         root.bind('<Destroy>',self.on_destroy,add='+')
@@ -129,6 +133,7 @@ class App:
         self.last_take_check.configure(state='normal' if ready else 'disabled')
         for r in self.radios: r.configure(state='normal' if ready else 'disabled')
         self.export_btn.configure(state='normal' if self.analysis and not self.busy else 'disabled')
+        self.marker_check.configure(state='normal' if self.analysis and not self.busy else 'disabled')
         self.cancel_btn.configure(state='normal' if self.busy else 'disabled')
         self.table.set_busy(self.busy)
         self.review_btn.configure(state='normal' if self.analysis and not self.busy else 'disabled')
@@ -271,7 +276,8 @@ class App:
         if a.last_take_only:
             take=(f'最後のテイク：元動画の{a.take_start+1:,}フレーム目から／' if a.restart_dark_runs
                   else 'やり直しの暗転なし：動画全体を対象／')
-        self.status.set(take+f'{len(a.cuts)}区間検出／カット予定 {sum(c.enabled for c in a.cuts)}区間／削除 {removed:,}フレーム ({removed/a.fps:.2f}秒)／出力 {kept/a.fps:.2f}秒')
+        plan=output_plan(a)
+        self.status.set(take+f'{len(a.cuts)}区間検出／カット予定 {sum(c.enabled for c in a.cuts)}区間／削除 {removed:,}フレーム ({removed/a.fps:.2f}秒)／出力 {plan.frames/plan.fps:.2f}秒')
 
     def selected(self):
         return self.table.selected_index if self.analysis else None
@@ -309,7 +315,7 @@ class App:
             self.analysis.cuts[i] = old
             messagebox.showerror('入力を確認',str(e)); return False
         if (c.start,c.end)==(old.start,old.end):return True
-        c.note = '手動で境界を変更'
+        c.note = '要確認：手動で境界を変更（30fpsの時間調整は適用しません）' if self.analysis.phases else '手動で境界を変更'
         self.update_row(i); return True
 
     def finish_edit(self):
@@ -379,7 +385,7 @@ class App:
         # never block wheel animation, and stale previews cannot replace a new row.
         with self.preview_lock:
             self.preview_request+=1
-            self.preview_pending=(self.preview_request,self.analysis.source,indices,width)
+            self.preview_pending=(self.preview_request,self.analysis.source,indices,width,self.analysis.fps)
             if self.preview_thread is None:
                 self.preview_thread=threading.Thread(target=self.preview_worker,daemon=True)
                 self.preview_thread.start()
@@ -389,7 +395,9 @@ class App:
             with self.preview_lock:
                 task=self.preview_pending;self.preview_pending=None
                 if task is None:self.preview_thread=None;return
-            request,source,indices,width=task;frames=[];cap=VideoCapture(source)
+            request,source,indices,width,fps=task;frames=[];cap=VideoCapture(source)
+            # Use the timestamp-validated rate, not a tail-distorted mux rate.
+            cap.fps=fps
             try:
                 for index in indices:
                     with self.preview_lock:
@@ -427,8 +435,9 @@ class App:
         if not path: return
         if Path(path).exists():
             messagebox.showerror('名前を変更','上書きせず、別のファイル名で保存してください。'); return
-        mute = self.audio.get()=='mute'; self.status.set('書き出しを開始します…')
-        self.work(lambda cb:export(self.analysis,path,mute,cb,self.cancel),'exported')
+        mute = self.audio.get()=='mute'; mark_pauses=self.mark_pauses.get()
+        self.status.set('書き出しを開始します…')
+        self.work(lambda cb:export(self.analysis,path,mute,cb,self.cancel,mark_pauses=mark_pauses),'exported')
 
     def poll(self):
         try:
@@ -474,13 +483,16 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--analyze'); p.add_argument('--output'); p.add_argument('--keep-audio',action='store_true')
     p.add_argument('--last-take-only',action='store_true',help='Switch 2の完全暗転で最後のテイクのみ切り出す')
+    p.add_argument('--mark-pauses',action='store_true',help='ポーズカット直前の1フレームに80×80の目印を付ける（初期設定OFF）')
     p.add_argument('--report'); p.add_argument('--smoke-ui',action='store_true'); args = p.parse_args()
     if args.analyze:
         a = analyze(args.analyze,lambda p,s:print(s,flush=True),last_take_only=args.last_take_only)
         data = {'frames':a.frames,'fps':a.fps,'cuts':[vars(c) for c in a.cuts],
                 'last_take_only':a.last_take_only,'take_start_frame':a.take_start+1,
+                'phase30':[vars(p) for p in a.phases],
+                'output_fps':output_plan(a).fps,'planned_output_frames':output_plan(a).frames,
                 'restart_dark_runs':[{'from':s+1,'through':e} for s,e in a.restart_dark_runs]}
-        if args.output: data = export(a,args.output,not args.keep_audio,lambda p,s:print(s,flush=True))
+        if args.output: data = export(a,args.output,not args.keep_audio,lambda p,s:print(s,flush=True),mark_pauses=args.mark_pauses)
         if args.report: Path(args.report).write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
         else: print(json.dumps(data,ensure_ascii=False,indent=2))
     else:

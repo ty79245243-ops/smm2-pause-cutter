@@ -62,6 +62,31 @@ class WorkflowTests(unittest.TestCase):
         self.app.last_take_check.invoke()
         self.assertFalse(self.app.last_take_check.instate(['selected']))
 
+    def test_marker_option_defaults_off_and_can_change_without_reanalysis(self):
+        self.assertFalse(self.app.mark_pauses.get())
+        self.assertTrue(self.app.marker_check.instate(['disabled']))
+        self.ready(expand=False);analysis=self.app.analysis
+        self.assertFalse(self.app.marker_check.instate(['disabled']))
+        self.app.marker_check.invoke()
+        self.assertTrue(self.app.mark_pauses.get())
+        self.assertIs(self.app.analysis,analysis)
+        self.app.marker_check.invoke()
+        self.assertFalse(self.app.mark_pauses.get())
+        self.app.locked(True)
+        self.assertTrue(self.app.marker_check.instate(['disabled']))
+
+    def test_export_captures_selected_marker_option(self):
+        self.ready(expand=False);jobs=[]
+        with patch('app.filedialog.asksaveasfilename',return_value='marker_option_test.mp4'), \
+                patch('app.Path.exists',return_value=False), \
+                patch.object(self.app,'work',side_effect=lambda fn,kind:jobs.append(fn)), \
+                patch('app.export') as exporter:
+            for enabled in (False,True):
+                self.app.mark_pauses.set(enabled);self.app.save()
+                self.app.mark_pauses.set(not enabled)
+                jobs[-1](lambda p,s:None)
+                self.assertEqual(exporter.call_args.kwargs['mark_pauses'],enabled)
+
     def test_last_take_summary_and_no_retry_message(self):
         self.ready(expand=False)
         a=Analysis('test.mp4',300,60,1920,1080,[],0,0,150,True,[(150,210)])

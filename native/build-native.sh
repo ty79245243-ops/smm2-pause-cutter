@@ -32,7 +32,7 @@ cd "$base/decoder"
 make -j8 > "$base/decoder-build.log" 2>&1
 make install >> "$base/decoder-build.log" 2>&1
 cd "$base/encoder"
-"$ffsrc/configure" --prefix="$base/prefix-encoder" --target-os=mingw32 --arch=x86_64 --cc=gcc --cxx=g++ --pkg-config="$base/tools/pkg-config" --disable-autodetect --disable-network --disable-doc --disable-debug --disable-shared --enable-static --enable-gpl --enable-libx264 --disable-encoders --enable-encoder=libx264,aac --disable-filters --enable-filter=select,setpts,atrim,asetpts,concat,scale,format,aresample,aformat,anull,null,apad,asplit --disable-ffplay --disable-indevs --disable-outdevs --disable-protocols --enable-protocol=file,pipe --extra-ldflags=-static-libgcc > "$base/encoder-configure.log" 2>&1
+"$ffsrc/configure" --prefix="$base/prefix-encoder" --target-os=mingw32 --arch=x86_64 --cc=gcc --cxx=g++ --pkg-config="$base/tools/pkg-config" --disable-autodetect --disable-network --disable-doc --disable-debug --disable-shared --enable-static --enable-gpl --enable-libx264 --disable-encoders --enable-encoder=libx264,aac --disable-filters --enable-filter=select,setpts,atrim,asetpts,concat,scale,format,aresample,aformat,anull,null,apad,asplit,drawbox,fps --disable-ffplay --disable-indevs --disable-outdevs --disable-protocols --enable-protocol=file,pipe --extra-ldflags=-static-libgcc > "$base/encoder-configure.log" 2>&1
 make -j8 > "$base/encoder-build.log" 2>&1
 make install >> "$base/encoder-build.log" 2>&1
 echo 'Native decoder and encoder build complete'

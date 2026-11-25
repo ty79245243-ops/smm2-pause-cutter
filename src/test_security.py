@@ -39,7 +39,9 @@ class SecurityTests(unittest.TestCase):
     def test_export_saves_only_mp4_and_ignores_old_cut_report(self):
         source=self.root/'input.mp4'
         source.write_bytes(base64.b64decode((Path(__file__).parent/'test_fixtures/ten_frames.b64').read_bytes()))
-        stat=source.stat();a=Analysis(str(source),10,30,160,90,[],stat.st_size,stat.st_mtime_ns)
+        # This test mocks encoding to verify file creation/overwrite guards.
+        # 30->60 timing is covered by phase and real-encoder integration tests.
+        stat=source.stat();a=Analysis(str(source),10,60,160,90,[],stat.st_size,stat.st_mtime_ns)
         def encode(args,*unused):Path(args[-1]).write_bytes(source.read_bytes())
         dst=self.root/'output.mp4'
         with patch('engine.run_ffmpeg',side_effect=encode):export(a,dst)

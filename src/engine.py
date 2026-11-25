@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from fractions import Fraction
+from bisect import bisect_left,bisect_right
+from phase30 import CrossTracker,PausePhase,classify,is_30fps
 import os, subprocess, tempfile, threading
 import cv2
 import numpy as np
@@ -13,7 +15,9 @@ CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 # Inclusive coordinates in a 1920x1080 capture, stored here end-exclusive.
 CLOSE_ROI = (1809,33,1881,105)
 MENU_THRESHOLD = .80
-VERSION = '2.7.4'
+VERSION = '2.9.1'
+PAUSE_MARKER_SIZE = 80
+PAUSE_MARKER_COLOR = '0xFF00FF'
 
 class Cancelled(Exception): pass
 
@@ -39,6 +43,7 @@ class Analysis:
     take_start: int = 0
     last_take_only: bool = False
     restart_dark_runs: list[tuple[int, int]] = field(default_factory=list)
+    phases: list[PausePhase] = field(default_factory=list)
 
 
 def fully_black(frame, gray=None):
@@ -166,6 +171,46 @@ def same(a, b):
     ssim=((2*ma*mb+6.5025)*(2*cov+58.5225))/((ma*ma+mb*mb+6.5025)*(va+vb+58.5225))
     return float(ssim.mean()) >= .990 and float(ssim.min()) >= .80
 
+def compressed_same(a,b):
+    """Fallback for widespread re-encoding damage, only around proven menus.
+
+    Keep same() strict for freeze-run expansion. This fallback additionally
+    requires a repeated clean picture before the menu at the caller, and
+    rejects concentrated changes even if the whole-screen average is small.
+    """
+    raw=cv2.absdiff(a,b)
+    if float(raw.mean())>6.5 or float(np.mean(raw>3))<.2:return False
+    a=cv2.GaussianBlur(a,(3,3),.7).astype(np.float32)
+    b=cv2.GaussianBlur(b,(3,3),.7).astype(np.float32)
+    d=cv2.absdiff(a,b)
+    if float(d.mean())>4.6 or float(d.max())>36:return False
+    if float(cv2.boxFilter(d,-1,(5,5)).max())>19:return False
+    ma=cv2.GaussianBlur(a,(7,7),1.2);mb=cv2.GaussianBlur(b,(7,7),1.2)
+    va=np.maximum(0,cv2.GaussianBlur(a*a,(7,7),1.2)-ma*ma)
+    vb=np.maximum(0,cv2.GaussianBlur(b*b,(7,7),1.2)-mb*mb)
+    cov=cv2.GaussianBlur(a*b,(7,7),1.2)-ma*mb
+    ssim=((2*ma*mb+6.5025)*(2*cov+58.5225))/((ma*ma+mb*mb+6.5025)*(va+vb+58.5225))
+    return float(ssim.mean())>=.968 and float(ssim.min())>=.20
+
+
+def timestamp_fps(times,metadata_fps):
+    """Use the observed CFR grid when a truncated tail distorts mux duration.
+
+    The normal VFR validation still runs against this rate afterwards; a
+    median alone is not proof that a recording has a constant frame rate.
+    """
+    if len(times)<12:return metadata_fps
+    # Measure across several frames: individual timestamp ticks can alternate
+    # above/below 1/fps (e.g. a 1/29996 time base on a true 30fps recording).
+    span=min(60,max(1,(len(times)-1)//4))
+    stamps=np.asarray(times,dtype=np.float64)
+    interval=float(np.median(stamps[span:]-stamps[:-span]))/span
+    if interval<=0:return metadata_fps
+    observed=1/interval
+    if abs(observed-metadata_fps)/metadata_fps>.005:return metadata_fps
+    return float(Fraction(observed).limit_denominator(1001))
+
+
 def make_close_reference():
     """Generic white cross generated from geometry; no game screenshot asset."""
     ref=np.zeros((72,72),np.uint8)
@@ -216,6 +261,19 @@ def resolve_cuts(gray, groups, fps, cancel=None):
                 if same(gray[p],gray[q]): pair=(p,q); break
             if pair: break
         if pair is None:
+            # Compression can change across the menu. Require a temporal
+            # plateau on the clean side, then choose the closest eligible
+            # pair rather than accepting the first looser similarity.
+            candidates=[]
+            for p in range(max(lower,a-window),a):
+                repeated=(p>lower and same(gray[p-1],gray[p])) or (p+1<a and same(gray[p],gray[p+1]))
+                if not repeated:continue
+                for q in range(b+1,min(upper,b+window+1)):
+                    if compressed_same(gray[p],gray[q]):
+                        candidates.append((float(cv2.absdiff(gray[p],gray[q]).mean()),p,q))
+            if candidates:
+                _,p,q=min(candidates);pair=(p,q)
+        if pair is None:
             cuts.append(Cut(a,b+1,a,b,False,'要確認：復帰画面が一致しない／境界不明'))
             continue
         p,q=pair
@@ -249,8 +307,11 @@ def analyze(source, progress=lambda p,s:None, cancel=None, *, last_take_only=Fal
     if abs(w/h-16/9)>.035:
         cap.release(); raise ValueError('16:9のゲーム画面が必要です。余白や配信枠を除いてから読み込んでください。')
     ref=make_close_reference()
+    # Metadata is only a hint here; validate the actual timestamp grid below.
+    near30=min(abs(fps-30),abs(fps-30000/1001))<.15
+    tracker=CrossTracker(ref[12:61,12:61]) if near30 else None
     mask=[]; times=[]; count=0
-    take_start=0; restarts=[]
+    take_start=0; restarts=[];phases=[]
     try:
         if last_take_only:
             fps=cap.prefer_cfr_rate()
@@ -270,6 +331,7 @@ def analyze(source, progress=lambda p,s:None, cancel=None, *, last_take_only=Fal
                     ok,frame=cap.read()
                     if not ok: break
                     mask.append(menu_match(frame,ref))
+                    if tracker is not None:tracker.add(frame)
                     # Only the boundary cache needs a whole-screen thumbnail.
                     small=cv2.resize(frame,(160,90),interpolation=cv2.INTER_AREA)
                     g=cv2.cvtColor(small,cv2.COLOR_BGR2GRAY)
@@ -283,6 +345,7 @@ def analyze(source, progress=lambda p,s:None, cancel=None, *, last_take_only=Fal
             if expected>0 and abs(count-remaining)>2: raise ValueError('動画を最後まで読めませんでした。破損や非対応形式を確認してください。')
             if last_take_only and not cap.timestamp_matches(times[0],take_start,fps):
                 raise ValueError('切り出し開始のフレーム位置を正確に読み取れませんでした。')
+            fps=timestamp_fps(times,fps)
             delta=np.diff(times)
             if len(delta)>10 and np.count_nonzero(np.abs(delta-1/fps)>.003)>max(3,len(delta)*.005):
                 raise ValueError('可変フレームレートの動画です。固定フレームレートに変換してから読み込んでください。')
@@ -292,6 +355,12 @@ def analyze(source, progress=lambda p,s:None, cancel=None, *, last_take_only=Fal
                 # frame numbers for editing, preview and the exported report.
                 cuts=resolve_cuts(gray,menu_groups(mask),fps,cancel)
                 for cut in cuts:
+                    if tracker is not None and is_30fps(fps) and cut.enabled:
+                        phase=classify(tracker.positions,cut)
+                        phases.append(phase.shifted(take_start))
+                        if phase.before is None or phase.after is None:
+                            side='前後' if phase.before is None and phase.after is None else '開始' if phase.before is None else '解除'
+                            cut.note=f'要確認：{side}時の×移動が欠落。判定できない側は通常の2回表示'
                     cut.start+=take_start; cut.end+=take_start
                     cut.menu_start+=take_start; cut.menu_end+=take_start
             finally: del gray
@@ -300,7 +369,7 @@ def analyze(source, progress=lambda p,s:None, cancel=None, *, last_take_only=Fal
     fps=float(Fraction(fps).limit_denominator(1001))
     progress(1,f'解析完了：{len(cuts)}区間を検出')
     return Analysis(str(source),count+take_start,fps,w,h,cuts,stat.st_size,stat.st_mtime_ns,
-                    take_start,bool(last_take_only),restarts)
+                    take_start,bool(last_take_only),restarts,phases)
 
 def keep_ranges(analysis):
     if not 0<=analysis.take_start<analysis.frames:
@@ -326,6 +395,77 @@ def ffmpeg():
         if not path.is_absolute() or not path.is_file():raise ValueError('FFmpegは実在する実行ファイルの絶対パスで指定してください。')
         return str(path.resolve())
     raise RuntimeError('FFmpegが見つかりません。配布ZIPをすべて展開するか、ビルド手順に従ってください。')
+
+
+def _retained_pause_markers(analysis, ranges=None):
+    """Output frame indices of the retained picture immediately before a cut.
+
+    The first frozen gameplay picture is retained at cut.start - 1. Account
+    for all preceding cuts and the last-take crop; never mark disabled cuts
+    or pictures that were themselves removed by another cut or the crop.
+    """
+    if ranges is None:ranges=keep_ranges(analysis)
+    points=sorted({c.start-1 for c in analysis.cuts if c.enabled and c.start>0})
+    result=[];cursor=0;offset=0
+    for a,b in ranges:
+        while cursor<len(points) and points[cursor]<a:cursor+=1
+        while cursor<len(points) and points[cursor]<b:
+            result.append(offset+points[cursor]-a);cursor+=1
+        offset+=b-a
+    return result
+
+
+@dataclass
+class OutputPlan:
+    fps:float
+    frames:int
+    ranges:list
+    singles:list
+    markers:list
+    audio_ranges:list
+
+
+def output_plan(analysis,ranges=None):
+    if ranges is None:ranges=keep_ranges(analysis)
+    count=sum(b-a for a,b in ranges)
+    marker_base=_retained_pause_markers(analysis,ranges)
+    if not is_30fps(analysis.fps):return OutputPlan(analysis.fps,count,ranges,[],marker_base,ranges)
+    ends=[];starts=[];offset=0
+    for a,b in ranges:
+        starts.append(offset);offset+=b-a;ends.append(offset)
+    def selected(frame):
+        for start,(a,b) in zip(starts,ranges):
+            if a<=frame<b:return start+frame-a
+        return None
+    singles=set()
+    phases={(p.menu_start,p.menu_end):p for p in analysis.phases}
+    for c in analysis.cuts:
+        p=phases.get((c.menu_start,c.menu_end))
+        if not c.enabled or p is None or (c.start,c.end)!=(p.cut_start,p.cut_end):continue
+        index=selected(p.freeze)
+        if index is None:continue
+        if p.before=='odd' and index>0:singles.add(index-1)
+        if p.after=='odd':singles.add(index)
+    singles=sorted(singles)
+    markers=[2*i-bisect_left(singles,i) for i in marker_base]
+    # Shorten the audio by the same half-input-frame portions as the video.
+    sources=[]
+    for i in singles:
+        r=bisect_right(ends,i)
+        sources.append(ranges[r][0]+i-starts[r])
+    audio=[];cursor=0
+    for a,b in ranges:
+        begin=a
+        while cursor<len(sources) and sources[cursor]<b:
+            s=sources[cursor]
+            if s>=begin:audio.append((begin,s+.5));begin=s+1
+            cursor+=1
+        if begin<b:audio.append((begin,b))
+    return OutputPlan(analysis.fps*2,count*2-len(singles),ranges,singles,markers,audio)
+
+
+def pause_marker_frames(analysis,ranges=None):
+    return output_plan(analysis,ranges).markers
 
 def ffmpeg_input():
     return ['-protocol_whitelist',INPUT_OPTIONS['protocol_whitelist'],
@@ -362,48 +502,59 @@ def has_audio(source):
         text=True,encoding='utf-8',errors='replace',creationflags=CREATE_NO_WINDOW)
     return 'Audio:' in p.stderr
 
-def export(analysis, destination, mute=True, progress=lambda p,s:None, cancel=None):
+def export(analysis, destination, mute=True, progress=lambda p,s:None, cancel=None, *, mark_pauses=False):
     dst=Path(destination).resolve(); src=Path(analysis.source).resolve()
     if dst==src: raise ValueError('元動画と同じ場所には保存できません。')
     if dst.exists(): raise ValueError('同名の出力ファイルがあります。別の名前を選んでください。')
     stat=src.stat()
     if stat.st_size!=analysis.source_size or stat.st_mtime_ns!=analysis.source_mtime:
         raise ValueError('解析後に元動画が変更されました。もう一度解析してください。')
-    ranges=keep_ranges(analysis); total=sum(b-a for a,b in ranges)
+    ranges=keep_ranges(analysis);plan=output_plan(analysis,ranges);total=plan.frames
+    markers=plan.markers if mark_pauses else []
     dst.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='mario_export_',dir=dst.parent) as tmp:
         temp=Path(tmp)/'result.mp4'; graphfile=Path(tmp)/'filters.txt'
-        fps=Fraction(analysis.fps).limit_denominator(1001)
+        fps=Fraction(plan.fps).limit_denominator(1001)
         expr='+'.join(f'between(n,{a},{b-1})' for a,b in ranges)
-        graph=f"[0:v:0]select='{expr}',setpts=N/({fps.numerator}/{fps.denominator}*TB)[v]"
+        if is_30fps(analysis.fps):
+            correction='+'.join(f'gte(N,{i+1})' for i in plan.singles) or '0'
+            graph=f"[0:v:0]select='{expr}',setpts='(2*N-({correction}))/({fps.numerator}/{fps.denominator}*TB)',fps=fps={fps.numerator}/{fps.denominator}:start_time=0:round=near:eof_action=pass"
+        else:graph=f"[0:v:0]select='{expr}',setpts=N/({fps.numerator}/{fps.denominator}*TB)"
+        if markers:
+            enable='+'.join(f'eq(n,{index})' for index in markers)
+            graph+=f",drawbox=x=0:y=0:w={PAUSE_MARKER_SIZE}:h={PAUSE_MARKER_SIZE}:color={PAUSE_MARKER_COLOR}:t=fill:enable='{enable}'"
+        graph+='[v]'
         audio=not mute and has_audio(src)
         if audio:
             pieces=[]; links=[]
-            for i,(a,b) in enumerate(ranges):
+            for i,(a,b) in enumerate(plan.audio_ranges):
                 pieces.append(f'[ax{i}]atrim=start={a/analysis.fps:.9f}:end={b/analysis.fps:.9f},asetpts=PTS-STARTPTS[a{i}]')
                 links.append(f'[a{i}]')
             # Pad a shorter audio stream so all retained video intervals exist.
-            graph+=';[0:a:0]asetpts=PTS-STARTPTS,apad,asplit='+str(len(ranges))+''.join(f'[ax{i}]' for i in range(len(ranges)))
-            graph+=';'+ ';'.join(pieces)+';'+''.join(links)+f'concat=n={len(ranges)}:v=0:a=1[a]'
+            graph+=';[0:a:0]asetpts=PTS-STARTPTS,apad,asplit='+str(len(plan.audio_ranges))+''.join(f'[ax{i}]' for i in range(len(plan.audio_ranges)))
+            graph+=';'+ ';'.join(pieces)+';'+''.join(links)+f'concat=n={len(plan.audio_ranges)}:v=0:a=1[a]'
         graphfile.write_text(graph,encoding='utf-8')
         args=[*ffmpeg_input(),'-i',str(src),'-/filter_complex',str(graphfile),'-map','[v]']
         args+=['-map','[a]','-c:a','aac','-b:a','192k'] if audio else ['-an']
         args+=['-c:v','libx264','-preset','fast','-crf','18','-pix_fmt','yuv420p',
-            '-r',str(fps),'-fps_mode','cfr','-movflags','+faststart','-y',str(temp)]
+            '-r',str(fps),'-fps_mode','cfr','-frames:v',str(total),'-movflags','+faststart','-y',str(temp)]
         run_ffmpeg(args,progress,cancel,total)
         check_cancel(cancel)
         verify=VideoCapture(str(temp))
         got=int(verify.get(cv2.CAP_PROP_FRAME_COUNT)); verify.release()
         if got!=total: raise RuntimeError(f'書き出し検証でフレーム数が一致しません：期待 {total} / 実際 {got}')
         data={'app_version':VERSION,'detector':'close-button ROI + spatial SSIM v3','source':str(src),'output':str(dst),'frame_numbering':'1-based inclusive',
-            'fps':analysis.fps,'input_frames':analysis.frames,'output_frames':total,
+            'fps':float(fps),'input_fps':analysis.fps,'output_fps':float(fps),'input_frames':analysis.frames,'output_frames':total,
+            'phase30':[vars(p) for p in analysis.phases],
             'last_take_only':analysis.last_take_only,'take_start_frame':analysis.take_start+1,
             'restart_dark_runs':[{'from':a+1,'through':b} for a,b in analysis.restart_dark_runs],
             'audio':'muted' if not audio else 'retained and cut',
+            'mark_pauses':bool(mark_pauses),
+            'pause_marker_frames':[index+1 for index in markers],
             'cuts':[{'delete_from':c.start+1,'delete_through':c.end,'enabled':c.enabled,'note':c.note,
                 'menu_from':c.menu_start+1,'menu_through':c.menu_end+1} for c in analysis.cuts]}
         # Never replace an existing user file, including a racing writer.
         temp.rename(dst)
-    progress(1,f'完了：{total:,}フレーム / {total/analysis.fps:.2f}秒')
+    progress(1,f'完了：{total:,}フレーム / {total/plan.fps:.2f}秒')
     return data
 
